@@ -1,0 +1,9 @@
+.vscode/
+.DS_Store
+.ipynb_checkpoints/
+.nextflow/
+work/
+images/
+data/
+bin/__pycache__/
+bin/tools/__pycache__/
