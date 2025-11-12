@@ -1,0 +1,27 @@
+{
+  "name": "",
+  "homePage": "",
+  "repos": {
+    "https://github.com/nf-core/modules.git": {
+      "modules": {
+        "nf-core": {
+          "bwamem2/index": {
+            "branch": "master",
+            "git_sha": "d86336f3e7ae0d5f76c67b0859409769cfeb2af2",
+            "installed_by": ["modules"]
+          },
+          "bwamem2/mem": {
+            "branch": "master",
+            "git_sha": "d86336f3e7ae0d5f76c67b0859409769cfeb2af2",
+            "installed_by": ["modules"]
+          },
+          "picard/markduplicates": {
+            "branch": "master",
+            "git_sha": "df124e87c74d8b40285199f8cc20151f5aa57255",
+            "installed_by": ["modules"]
+          }
+        }
+      }
+    }
+  }
+}
