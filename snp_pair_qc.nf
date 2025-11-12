@@ -13,15 +13,8 @@ workflow {
             .splitCsv(header: true)
             .map { row ->
                 def meta = [id: row.sample, cfDNA_pileup: file(row.pileup)]
-                def fastq1 = file(row.fastq1)
-                if (!fastq1.exists()) {
-                    error "Fastq1 file ${fastq1} does not exist"
-                }
-                def fastq2 = file(row.fastq2)
-                if (!fastq2.exists()) {
-                    error "Fastq2 file ${fastq2} does not exist"
-                }
-                return [meta, fastq1, fastq2]
+                def reads = [ file(row.fastq1), file(row.fastq2) ]
+                return [meta, reads]
             }
             .set { ch_input_samplesheet }
     } else {
@@ -34,7 +27,7 @@ workflow {
             ch_input_samplesheet,
             [[:], file(params.fasta_index)],
             [[:], file(params.fasta)],
-            true
+            channel.value(true)
         )
         BWAMEM2_MEM.out.bam
             .set { ch_mapped_bams }
