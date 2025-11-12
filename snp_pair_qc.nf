@@ -1,4 +1,5 @@
 // Load modules
+include { BWAMEM2_INDEX } from './modules/nf-core/bwamem2/index/main.nf'
 include { BWAMEM2_MEM } from './modules/nf-core/bwamem2/mem/main.nf'
 include { PICARD_MARKDUPLICATES } from './modules/nf-core/picard/markduplicates/main.nf'
 include { SNP_PILEUP } from './modules/local/snp_pileup/main.nf'
@@ -23,9 +24,15 @@ workflow {
 
     // 2. Mapping and bam processing
     if (ch_input_samplesheet && params.fasta && params.fasta_index) {
+        BWAMEM2_INDEX(
+            [[:], file(params.fasta)]
+        )
+        BWAMEM2_INDEX.out.index
+            .set { ch_index }
+
         BWAMEM2_MEM(
             ch_input_samplesheet,
-            [[:], file(params.fasta_index)],
+            ch_index,
             [[:], file(params.fasta)],
             channel.value(true)
         )
