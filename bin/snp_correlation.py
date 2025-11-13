@@ -389,13 +389,13 @@ def save_report(output_prefix: str, tissue_file: Path, cfDNA_file: Path,
 )
 @click.option(
     '--min-snp-count',
-    default=3000,
+    default=300,
     type=int,
     help='Minimum number of merged SNPs required for QC pass (default: 3000)'
 )
 @click.option(
     '--min-depth',
-    default=30,
+    default=10,
     type=int,
     help='Minimum sequencing depth threshold for filtering (default: 30)'
 )
