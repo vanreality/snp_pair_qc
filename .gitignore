@@ -7,3 +7,5 @@ images/
 data/
 bin/__pycache__/
 bin/tools/__pycache__/
+containers/
+.nextflow*

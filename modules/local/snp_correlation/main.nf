@@ -9,11 +9,13 @@ process SNP_CORRELATION {
     tuple val(meta), path("*_report.txt"), emit: report
     
     script:
+    def args = task.ext.args ?: ''
     """
     # Run correlation script
     python ${correlation_script} \\
         --tissue-pileup ${tissue_pileup} \\
         --cfDNA-pileup ${cfDNA_pileup} \\
-        --output ${meta.id}
+        --output ${meta.id} \\
+        ${args}
     """
 }

@@ -1,13 +1,20 @@
 #!/usr/bin/env python3
 """
-BAM to Pileup Converter for WES Data
+BAM to Pileup Converter for WES and Bisulfite Sequencing Data
 
-This script processes BAM files from Whole Exome Sequencing (WES) to generate
-simple pileup data at targeted SNP sites. It performs basic read counting without 
-probability weighting, reporting raw reference and alternate allele counts.
+This script processes BAM files from Whole Exome Sequencing (WES) or bisulfite
+sequencing to generate simple pileup data at targeted SNP sites. It performs 
+basic read counting without probability weighting, reporting raw reference and 
+alternate allele counts.
 
 The script applies quality filtering (mapping quality and base quality thresholds)
 to produce accurate pileup statistics for variant analysis workflows.
+
+When --methylation-mode is enabled, the script handles bisulfite conversion
+chemistry artifacts by filtering reads based on their alignment strand and SNP type:
+- C↔T SNPs: only count reverse strand reads (flags 16/83/163)
+- G↔A SNPs: only count forward strand reads (flags 0/99/147)
+- Other SNPs: count all strand reads
 """
 
 import sys
@@ -139,6 +146,66 @@ def parse_known_sites(sites_file: Path, progress: Progress, task_id: TaskID) -> 
         raise
 
 
+def get_allowed_flags_for_snp(ref: str, alt: str) -> Optional[set]:
+    """
+    Determine which SAM flags are allowed for a given SNP type in bisulfite sequencing.
+    
+    Bisulfite conversion chemistry introduces strand-specific artifacts:
+    - Forward strand reads (flags 0/99/147): C→T conversion occurs
+    - Reverse strand reads (flags 16/83/163): G→A conversion occurs (complement of C→T)
+    
+    To avoid counting chemistry-induced variations as SNPs:
+    - For C↔T SNPs: only use reverse strand reads (flags 16/83/163)
+    - For G↔A SNPs: only use forward strand reads (flags 0/99/147)
+    - For other SNPs: use all reads (no flag restriction)
+    
+    SAM Flag Reference:
+    - 0: Unmapped or single-end forward strand
+    - 16: Reverse strand
+    - 99: First in pair, forward strand, mate reverse
+    - 147: Second in pair, reverse strand (but represents forward original strand)
+    - 83: First in pair, reverse strand, mate forward
+    - 163: Second in pair, forward strand (but represents reverse original strand)
+    
+    Args:
+        ref (str): Reference allele (single nucleotide, uppercase)
+        alt (str): Alternate allele (single nucleotide, uppercase)
+        
+    Returns:
+        Optional[set]: Set of allowed SAM flags, or None if all flags are allowed
+        
+    Examples:
+        >>> get_allowed_flags_for_snp('C', 'T')
+        {16, 83, 163}
+        >>> get_allowed_flags_for_snp('G', 'A')
+        {0, 99, 147}
+        >>> get_allowed_flags_for_snp('A', 'G')
+        {0, 99, 147}
+        >>> get_allowed_flags_for_snp('A', 'C')
+        None
+    """
+    ref = ref.upper()
+    alt = alt.upper()
+    
+    # Forward strand flags (original forward strand in bisulfite sequencing)
+    forward_flags = {0, 99, 147}
+    
+    # Reverse strand flags (original reverse strand in bisulfite sequencing)
+    reverse_flags = {16, 83, 163}
+    
+    # Check for C↔T SNPs (affected by forward strand bisulfite conversion)
+    if (ref == 'C' and alt == 'T') or (ref == 'T' and alt == 'C'):
+        return reverse_flags  # Only use reverse strand reads
+    
+    # Check for G↔A SNPs (affected by reverse strand bisulfite conversion)
+    elif (ref == 'G' and alt == 'A') or (ref == 'A' and alt == 'G'):
+        return forward_flags  # Only use forward strand reads
+    
+    # For all other SNP types, no flag restriction needed
+    else:
+        return None  # Allow all flags
+
+
 def classify_base(base: str, ref: str, alt: str) -> Optional[str]:
     """
     Classify a sequenced base as REF or ALT using strict matching.
@@ -163,8 +230,54 @@ def classify_base(base: str, ref: str, alt: str) -> Optional[str]:
         return None
 
 
+def classify_base_with_methylation(base: str, ref: str, alt: str) -> Optional[str]:
+    """
+    Classify a sequenced base as REF or ALT considering methylation chemistry.
+    
+    Methylation chemistry rules:
+    - If ref=C and alt≠T: count both C and T as REF
+    - If ref=G and alt≠A: count both G and A as REF  
+    - If alt=C and ref≠T: count both C and T as ALT
+    - If alt=G and ref≠A: count both G and A as ALT
+    - Otherwise: strict matching
+    
+    Args:
+        base (str): Sequenced base (uppercase)
+        ref (str): Reference allele (uppercase)
+        alt (str): Alternate allele (uppercase)
+        
+    Returns:
+        Optional[str]: 'REF', 'ALT', or None if base doesn't match either
+    """
+    base = base.upper()
+    ref = ref.upper()
+    alt = alt.upper()
+    
+    # Check REF classification with methylation rules
+    if ref == 'C' and alt != 'T':
+        if base in ['C', 'T']:
+            return 'REF'
+    elif ref == 'G' and alt != 'A':
+        if base in ['G', 'A']:
+            return 'REF'
+    elif base == ref:
+        return 'REF'
+    
+    # Check ALT classification with methylation rules
+    if alt == 'C' and ref != 'T':
+        if base in ['C', 'T']:
+            return 'ALT'
+    elif alt == 'G' and ref != 'A':
+        if base in ['G', 'A']:
+            return 'ALT'
+    elif base == alt:
+        return 'ALT'
+    
+    return None
+
+
 def process_pileup_site(bam_file: pysam.AlignmentFile, site: SNPSite, 
-                       min_mapq: int, min_bq: int) -> PileupCounts:
+                       min_mapq: int, min_bq: int, methylation_mode: bool = False) -> PileupCounts:
     """
     Process a single SNP site to compute raw pileup counts.
     
@@ -173,6 +286,7 @@ def process_pileup_site(bam_file: pysam.AlignmentFile, site: SNPSite,
         site (SNPSite): SNP site to process
         min_mapq (int): Minimum mapping quality threshold
         min_bq (int): Minimum base quality threshold
+        methylation_mode (bool): If True, apply bisulfite-specific flag filtering and base classification
         
     Returns:
         PileupCounts: Raw counts for this site
@@ -182,6 +296,11 @@ def process_pileup_site(bam_file: pysam.AlignmentFile, site: SNPSite,
     """
     counts = PileupCounts()
     processed_templates = set()  # Track processed template names to avoid double-counting
+    
+    # Determine which SAM flags are allowed for this SNP type (for methylation mode)
+    allowed_flags = None
+    if methylation_mode:
+        allowed_flags = get_allowed_flags_for_snp(site.ref, site.alt)
     
     try:
         # Get pileup column at the specified position
@@ -209,6 +328,12 @@ def process_pileup_site(bam_file: pysam.AlignmentFile, site: SNPSite,
                 if read.is_unmapped:
                     continue
                 
+                # Apply bisulfite-specific flag filtering (only in methylation mode)
+                if methylation_mode and allowed_flags is not None:
+                    read_flag = read.flag
+                    if read_flag not in allowed_flags:
+                        continue  # Skip reads with disallowed flags for this SNP type
+                
                 # Skip deletions, reference skips, and insertions
                 if pileup_read.is_del or pileup_read.is_refskip:
                     continue
@@ -230,8 +355,12 @@ def process_pileup_site(bam_file: pysam.AlignmentFile, site: SNPSite,
                     continue
                 processed_templates.add(template_key)
                 
-                # Classify base as REF or ALT
-                classification = classify_base(query_base, site.ref, site.alt)
+                # Classify base as REF or ALT (use methylation-aware classification if enabled)
+                if methylation_mode:
+                    classification = classify_base_with_methylation(query_base, site.ref, site.alt)
+                else:
+                    classification = classify_base(query_base, site.ref, site.alt)
+                
                 if classification is None:
                     continue
                 
@@ -250,7 +379,7 @@ def process_pileup_site(bam_file: pysam.AlignmentFile, site: SNPSite,
 
 
 def process_sites_chunk(bam_path: Path, sites_chunk: List[SNPSite], 
-                       min_mapq: int, min_bq: int) -> List[Tuple[SNPSite, PileupCounts]]:
+                       min_mapq: int, min_bq: int, methylation_mode: bool = False) -> List[Tuple[SNPSite, PileupCounts]]:
     """
     Process a chunk of SNP sites in a worker process.
     
@@ -262,6 +391,7 @@ def process_sites_chunk(bam_path: Path, sites_chunk: List[SNPSite],
         sites_chunk (List[SNPSite]): Chunk of SNP sites to process
         min_mapq (int): Minimum mapping quality threshold
         min_bq (int): Minimum base quality threshold
+        methylation_mode (bool): If True, apply bisulfite-specific filtering
         
     Returns:
         List[Tuple[SNPSite, PileupCounts]]: List of (site, counts) pairs for this chunk
@@ -275,7 +405,7 @@ def process_sites_chunk(bam_path: Path, sites_chunk: List[SNPSite],
         # Each worker opens its own BAM file handle
         with pysam.AlignmentFile(str(bam_path), "rb") as bam:
             for site in sites_chunk:
-                counts = process_pileup_site(bam, site, min_mapq, min_bq)
+                counts = process_pileup_site(bam, site, min_mapq, min_bq, methylation_mode)
                 results.append((site, counts))
     except Exception as e:
         # Return partial results with error information
@@ -287,7 +417,7 @@ def process_sites_chunk(bam_path: Path, sites_chunk: List[SNPSite],
 
 def generate_pileup_data(bam_file: Path, sites: List[SNPSite],
                         min_mapq: int, min_bq: int, ncpus: int,
-                        progress: Progress, task_id: TaskID) -> List[Tuple[SNPSite, PileupCounts]]:
+                        progress: Progress, task_id: TaskID, methylation_mode: bool = False) -> List[Tuple[SNPSite, PileupCounts]]:
     """
     Generate pileup data for all SNP sites using parallel processing.
     
@@ -303,6 +433,7 @@ def generate_pileup_data(bam_file: Path, sites: List[SNPSite],
         ncpus (int): Number of parallel processes to use
         progress (Progress): Rich progress bar instance
         task_id (TaskID): Task ID for progress tracking
+        methylation_mode (bool): If True, apply bisulfite-specific filtering
         
     Returns:
         List[Tuple[SNPSite, PileupCounts]]: List of (site, counts) pairs
@@ -340,7 +471,7 @@ def generate_pileup_data(bam_file: Path, sites: List[SNPSite],
         with ProcessPoolExecutor(max_workers=ncpus) as executor:
             # Submit all chunks to the pool
             future_to_chunk = {
-                executor.submit(process_sites_chunk, bam_file, chunk, min_mapq, min_bq): chunk
+                executor.submit(process_sites_chunk, bam_file, chunk, min_mapq, min_bq, methylation_mode): chunk
                 for chunk in site_chunks
             }
             
@@ -476,17 +607,31 @@ def save_pileup_output(results: List[Tuple[SNPSite, PileupCounts]], output_prefi
     type=int,
     help='Number of parallel processes to use (default: 8)'
 )
+@click.option(
+    '--methylation-mode',
+    is_flag=True,
+    default=False,
+    help='Enable bisulfite sequencing mode with strand-aware filtering (default: False)'
+)
 def main(input_bam: Path, known_sites: Path,
-         output: str, min_mapq: int, min_bq: int, ncpus: int) -> None:
+         output: str, min_mapq: int, min_bq: int, ncpus: int, methylation_mode: bool) -> None:
     """
-    Generate pileup data from WES BAM files.
+    Generate pileup data from WES or bisulfite sequencing BAM files.
     
-    This tool processes BAM files from Whole Exome Sequencing to compute
-    raw reference and alternate allele counts at known SNP sites. It applies
+    This tool processes BAM files from Whole Exome Sequencing or bisulfite sequencing
+    to compute raw reference and alternate allele counts at known SNP sites. It applies
     quality filtering (mapping quality and base quality thresholds) to produce
     accurate pileup statistics for variant analysis workflows.
+    
+    When --methylation-mode is enabled, the tool applies bisulfite-specific filtering:
+    - For C↔T SNPs: only counts reverse strand reads (flags 16/83/163)
+    - For G↔A SNPs: only counts forward strand reads (flags 0/99/147)
+    - For other SNPs: counts all strand reads
     """
-    console.print("\n[bold blue]BAM to Pileup Converter for WES[/bold blue]")
+    if methylation_mode:
+        console.print("\n[bold blue]BAM to Pileup Converter (Methylation Mode)[/bold blue]")
+    else:
+        console.print("\n[bold blue]BAM to Pileup Converter for WES[/bold blue]")
     console.print("="*70)
     
     # Display input parameters
@@ -500,9 +645,17 @@ def main(input_bam: Path, known_sites: Path,
     params_table.add_row("Min MAPQ", str(min_mapq))
     params_table.add_row("Min Base Quality", str(min_bq))
     params_table.add_row("Parallel Workers", str(ncpus))
+    params_table.add_row("Methylation Mode", "Enabled" if methylation_mode else "Disabled")
     
     console.print(params_table)
     console.print()
+    
+    # Display bisulfite filtering rules if methylation mode is enabled
+    if methylation_mode:
+        console.print("[bold yellow]Bisulfite Conversion Filtering Rules:[/bold yellow]")
+        console.print("  • [cyan]C↔T SNPs:[/cyan] Only reverse strand reads (flags 16/83/163)")
+        console.print("  • [cyan]G↔A SNPs:[/cyan] Only forward strand reads (flags 0/99/147)")
+        console.print("  • [cyan]Other SNPs:[/cyan] All strand reads\n")
     
     try:
         with Progress(console=console) as progress:
@@ -514,10 +667,10 @@ def main(input_bam: Path, known_sites: Path,
             # Parse known sites (use all sites, no BED filtering)
             all_sites = parse_known_sites(known_sites, progress, sites_task)
             
-            # Generate pileup data with bisulfite-aware filtering and parallel processing
+            # Generate pileup data with optional methylation-aware filtering and parallel processing
             pileup_results = generate_pileup_data(
                 input_bam, all_sites, min_mapq, min_bq, ncpus,
-                progress, pileup_task
+                progress, pileup_task, methylation_mode
             )
             
             # Save output
@@ -531,9 +684,24 @@ def main(input_bam: Path, known_sites: Path,
             
             sites_with_coverage = sum(1 for _, counts in pileup_results 
                                     if counts.current_depth > 0)
+            
+            # Calculate statistics by SNP type if methylation mode is enabled
+            if methylation_mode:
+                ct_snps = sum(1 for site, _ in pileup_results 
+                             if (site.ref == 'C' and site.alt == 'T') or (site.ref == 'T' and site.alt == 'C'))
+                ga_snps = sum(1 for site, _ in pileup_results 
+                             if (site.ref == 'G' and site.alt == 'A') or (site.ref == 'A' and site.alt == 'G'))
+                other_snps = total_sites - ct_snps - ga_snps
+            else:
+                ct_snps = 0
+                ga_snps = 0
+                other_snps = 0
         else:
             mean_raw_depth = 0.0
             sites_with_coverage = 0
+            ct_snps = 0
+            ga_snps = 0
+            other_snps = 0
         
         # Display summary statistics
         summary_table = Table(title="Processing Summary", show_header=True, header_style="bold green")
@@ -543,6 +711,14 @@ def main(input_bam: Path, known_sites: Path,
         summary_table.add_row("Total SNP sites processed", f"{total_sites:,}")
         summary_table.add_row("Sites with coverage", f"{sites_with_coverage:,}")
         summary_table.add_row("Mean depth (unweighted)", f"{mean_raw_depth:.2f}")
+        
+        # Add SNP type breakdown if methylation mode is enabled
+        if methylation_mode:
+            summary_table.add_row("", "")  # Spacer
+            summary_table.add_row("[bold]SNP Type Breakdown:[/bold]", "")
+            summary_table.add_row("  C↔T SNPs (reverse strand only)", f"{ct_snps:,}")
+            summary_table.add_row("  G↔A SNPs (forward strand only)", f"{ga_snps:,}")
+            summary_table.add_row("  Other SNPs (all strands)", f"{other_snps:,}")
         
         console.print(summary_table)
         console.print(f"\n[bold green]✓ Processing completed successfully![/bold green]")

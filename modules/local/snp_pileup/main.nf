@@ -10,6 +10,7 @@ process SNP_PILEUP {
     tuple val(meta), path("*_pileup.tsv.gz"), emit: pileup
     
     script:
+    def args = task.ext.args ?: ''
     """
     # Index BAM file
     samtools index ${bamFile}
@@ -19,6 +20,7 @@ process SNP_PILEUP {
         --input-bam ${bamFile} \\
         --known-sites ${known_sites_tsv} \\
         --output ${meta.id} \\
-        --ncpus ${task.cpus}
+        --ncpus ${task.cpus} \\
+        ${args}
     """
 }

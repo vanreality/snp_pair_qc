@@ -15,9 +15,24 @@
             "git_sha": "d86336f3e7ae0d5f76c67b0859409769cfeb2af2",
             "installed_by": ["modules"]
           },
+          "bwameth/align": {
+            "branch": "master",
+            "git_sha": "96d9a187355d26f9a5e0380f8b59c7005d073268",
+            "installed_by": ["modules"]
+          },
+          "bwameth/index": {
+            "branch": "master",
+            "git_sha": "79f1c3e487520405be6dd47ed7f196efd1e3b63e",
+            "installed_by": ["modules"]
+          },
           "picard/markduplicates": {
             "branch": "master",
             "git_sha": "df124e87c74d8b40285199f8cc20151f5aa57255",
+            "installed_by": ["modules"]
+          },
+          "trimgalore": {
+            "branch": "master",
+            "git_sha": "1b32b48b7d2803ae78a1beb20b7e9657dbcda776",
             "installed_by": ["modules"]
           }
         }
