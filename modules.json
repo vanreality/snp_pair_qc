@@ -30,6 +30,11 @@
             "git_sha": "df124e87c74d8b40285199f8cc20151f5aa57255",
             "installed_by": ["modules"]
           },
+          "samtools/sort": {
+            "branch": "master",
+            "git_sha": "5cb9a8694da0a0e550921636bb60bc8c56445fd7",
+            "installed_by": ["modules"]
+          },
           "trimgalore": {
             "branch": "master",
             "git_sha": "1b32b48b7d2803ae78a1beb20b7e9657dbcda776",
