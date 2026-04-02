@@ -2,7 +2,7 @@ process SNP_CORRELATION {
     tag "$meta.id"
     
     input:
-    tuple val(meta), path(tissue_pileup), path(cfDNA_pileup)
+    tuple val(meta), path(tissue_pileup, stageAs: 'tissue_pileup.tsv.gz'), path(cfDNA_pileup, stageAs: 'cfdna_pileup.tsv.gz')
     path(correlation_script)
     
     output:
@@ -13,8 +13,8 @@ process SNP_CORRELATION {
     """
     # Run correlation script
     python ${correlation_script} \\
-        --tissue-pileup ${tissue_pileup} \\
-        --cfDNA-pileup ${cfDNA_pileup} \\
+        --tissue-pileup tissue_pileup.tsv.gz \\
+        --cfDNA-pileup cfdna_pileup.tsv.gz \\
         --output ${meta.id} \\
         ${args}
     """
